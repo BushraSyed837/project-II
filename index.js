@@ -18,70 +18,63 @@ fastify.get(
       // getting message object
       const msgs = JSON.parse(message)
       msgs.createdAt = new Date()
-      delete msgs._id
-      // match ids
-      if (
-        msgs.driverID == req.params.driver &&
-        msgs.userID == req.params.user
-      ) {
-        // assigning unique client ids
-        connection.socket.id = randomId
-        msgs.clientID = connection.socket.id
-        //insert message in DB
+      // assigning unique client ids
+      connection.socket.id = randomId
+      msgs.clientID = connection.socket.id
+      //insert message in DB
+      try {
+        await chat.insertOne(msgs)
+      } catch (err) {
+        console.log(err)
+      }
+      //loop for socket connections
+      this.websocketServer.clients.forEach(async client => {
+        const result = await chat
+          .find({
+            userID: msgs.userID,
+            driverID: msgs.driverID
+          })
+          .toArray()
+        // getting client ids
+        const clientIdLists = result.map((data, i) => {
+          return data.clientID
+        })
         try {
-          await chat.insertOne(msgs)
+          if (
+            clientIdLists.includes(client.id) &&
+            client.readyState === connection.socket.OPEN
+          ) {
+            if (msgs.type == 'send') {
+              client.send(`Message: ${msgs.messageContent}`)
+            } else {
+              const driverMessages = result.map((data, i) => {
+                if (data.senderType == 'driver') {
+                  return data.messageContent
+                }
+              })
+              console.log('driver', driverMessages)
+              const userMessages = result.map((data, i) => {
+                if (data.senderType == 'user') {
+                  return data.messageContent
+                }
+              })
+              console.log('user', userMessages)
+              userMessages.forEach(messages => {
+                if (messages !== undefined) {
+                  client.send(`User Message: ${messages}`)
+                }
+              })
+              driverMessages.forEach(messages => {
+                if (messages !== undefined) {
+                  client.send(`User Message: ${messages}`)
+                }
+              })
+            }
+          }
         } catch (err) {
           console.log(err)
         }
-        //loop for socket connections
-        this.websocketServer.clients.forEach(async client => {
-          const result = await chat
-            .find({
-              userID: msgs.userID,
-              driverID: msgs.driverID
-            })
-            .toArray()
-          // getting client ids
-          const clientIdLists = result.map((data, i) => {
-            return data.clientID
-          })
-          try {
-            if (
-              clientIdLists.includes(client.id) &&
-              client.readyState === connection.socket.OPEN
-            ) {
-              if (msgs.type == 'send') {
-                client.send(`Message: ${msgs.messageContent}`)
-              } else {
-                const driverMessages = result.map((data, i) => {
-                  if (data.senderType == 'driver') {
-                    return data.messageContent
-                  }
-                })
-                console.log('driver', driverMessages)
-                const userMessages = result.map((data, i) => {
-                  if (data.senderType == 'user') {
-                    return data.messageContent
-                  }
-                })
-                console.log('user', userMessages)
-                userMessages.forEach(d => {
-                  if (d !== undefined) {
-                    client.send(`User Message: ${d}`)
-                  }
-                })
-                driverMessages.forEach(d => {
-                  if (d !== undefined) {
-                    client.send(`User Message: ${d}`)
-                  }
-                })
-              }
-            }
-          } catch (err) {
-            console.log(err)
-          }
-        })
-      }
+      })
     })
   }
 )
