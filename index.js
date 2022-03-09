@@ -5,75 +5,86 @@ fastify.register(require('fastify-mongodb'), {
   forceClose: true,
   url: 'mongodb://localhost:27017/project1'
 })
-fastify.get('/chat', { websocket: true }, async function wsHandler (
-  connection,
-  req
-) {
-  connection.socket.on('message', async message => {
-    connection.socket.send(message)
-    let allClients = this.websocketServer.clients
-    allClients.forEach(client => {
-      console.log(client.readyState === connection.socket.OPEN)
-      try {
-        if (
-          client.readyState === connection.socket.OPEN
-        ) {
-          client.send(message)
+fastify.get(
+  '/chat/:driver/:user',
+  { websocket: true },
+  async function wsHandler (connection, req) {
+    // collection instance
+    const chat = this.mongo.db.collection('chats')
+    // random ID
+    let randomId = Math.floor(new Date().valueOf() * Math.random())
+    //on connection
+    connection.socket.on('message', async message => {
+      // getting message object
+      const msgs = JSON.parse(message)
+      msgs.createdAt = new Date()
+      delete msgs._id
+      // match ids
+      if (
+        msgs.driverID == req.params.driver &&
+        msgs.userID == req.params.user
+      ) {
+        // assigning unique client ids
+        connection.socket.id = randomId
+        msgs.clientID = connection.socket.id
+        //insert message in DB
+        try {
+          await chat.insertOne(msgs)
+        } catch (err) {
+          console.log(err)
         }
-      } catch (err) {
-        console.log(err)
+        //loop for socket connections
+        this.websocketServer.clients.forEach(async client => {
+          const result = await chat
+            .find({
+              userID: msgs.userID,
+              driverID: msgs.driverID
+            })
+            .toArray()
+          // getting client ids
+          const clientIdLists = result.map((data, i) => {
+            return data.clientID
+          })
+          try {
+            if (
+              clientIdLists.includes(client.id) &&
+              client.readyState === connection.socket.OPEN
+            ) {
+              if (msgs.type == 'send') {
+                client.send(`Message: ${msgs.messageContent}`)
+              } else {
+                const driverMessages = result.map((data, i) => {
+                  if (data.senderType == 'driver') {
+                    return data.messageContent
+                  }
+                })
+                console.log('driver', driverMessages)
+                const userMessages = result.map((data, i) => {
+                  if (data.senderType == 'user') {
+                    return data.messageContent
+                  }
+                })
+                console.log('user', userMessages)
+                userMessages.forEach(d => {
+                  if (d !== undefined) {
+                    client.send(`User Message: ${d}`)
+                  }
+                })
+                driverMessages.forEach(d => {
+                  if (d !== undefined) {
+                    client.send(`User Message: ${d}`)
+                  }
+                })
+              }
+            }
+          } catch (err) {
+            console.log(err)
+          }
+        })
       }
     })
-  })
-})
-// fastify.get(
-//   '/chat/:driver/:user',
-//   { websocket: true },
-//   async function wsHandler (connection, req) {
-//     const chat = this.mongo.db.collection('chats')
-//     connection.socket.on('message', async message => {
-//       const msgs = JSON.parse(message)
-//       msgs.createdAt = new Date()
-//       delete msgs._id
-//       await chat.insertOne(msgs)
-//       if (
-//         msgs.driverID == req.params.driver &&
-//         msgs.userID == req.params.user
-//       ) {
-//         if (msgs.type == 'send') {
-//           connection.socket.send(`Message: ${msgs.messageContent}`)
-//         } else {
-//           const result = await chat
-//             .find({
-//               userID: msgs.userID,
-//               driverID: msgs.driverID
-//             })
-//             .toArray()
-//           const driverMessages = result.reduce((content, i) => {
-//             if (i.senderType == 'driver') {
-//               content.push(i.messageContent)
-//             }
-//             return content
-//           }, [])
-//           console.log('driver', driverMessages)
-//           const userMessages = result.reduce((content, i) => {
-//             if (i.senderType == 'driver') {
-//               content.push(i.messageContent)
-//             }
-//             return content
-//           }, [])
-//           console.log('user', userMessages)
-//           userMessages.forEach(d => {
-//             connection.socket.send(`User Message: ${d}`)
-//           })
-//           driverMessages.forEach(d => {
-//             connection.socket.send(`Driver Message: ${d}`)
-//           })
-//         }
-//       }
-//     })
-//   }
-// )
+  }
+)
 
 fastify.listen(3000, (err, address) => {
   if (err) {
